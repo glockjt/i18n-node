@@ -15,10 +15,12 @@ var vsprintf = require('sprintf').vsprintf,
     warn = require('debug')('i18n:warn'),
     error = require('debug')('i18n:error'),
     Mustache = require('mustache'),
+    Dropbox = require('dropbox'),
+    Q = require('q'),
     locales = {},
     api = ['__', '__n', 'getLocale', 'setLocale', 'getCatalog'],
     pathsep = path.sep || '/', // ---> means win support will be available in node 0.8.x and above
-    defaultLocale, updateFiles, cookiename, extension, directory, indent, objectNotation;
+    defaultLocale, updateFiles, cookiename, extension, directory, indent, objectNotation, dropboxClientKey, dropboxClientSecret, dropboxClientToken;
 
 // public exports
 var i18n = exports;
@@ -56,10 +58,19 @@ i18n.configure = function i18nConfigure(opt) {
   // enable object notation?
   objectNotation = (typeof opt.objectNotation === 'boolean') ? opt.objectNotation : false;
 
+  // dropbox key
+  dropboxClientKey = (typeof opt.dropboxClientKey === 'string') ? opt.dropboxClientKey : null;
+
+  // dropbox key
+  dropboxClientSecret = (typeof opt.dropboxClientSecret === 'string') ? opt.dropboxClientSecret : null;
+
+  // dropbox key
+  dropboxClientToken = (typeof opt.dropboxClientToken === 'string') ? opt.dropboxClientToken : null;
+
   // implicitly read all locales
   if (typeof opt.locales === 'object') {
     opt.locales.forEach(function (l) {
-      read(l);
+      read(l, opt);
     });
   }
 };
@@ -607,32 +618,76 @@ function localeMutator(locale,singular,allowBranching) {
  * try reading a file
  */
 
-function read(locale) {
+function read(locale, opt) {
   var localeFile = {},
-      file = getStorageFilePath(locale);
-  try {
-    logDebug('read ' + file + ' for locale: ' + locale);
-    localeFile = fs.readFileSync(file);
+      file = null;
+
+  if (opt.hasOwnProperty('dropboxClientKey')){
+    getDropboxFile(locale).then(function(localeFile) {
+      try {
+        // parsing filecontents to locales[locale]
+        locales[locale] = JSON.parse(localeFile);
+
+      } catch (parseError) {
+        logError('unable to parse locales from file (maybe ' + file + ' is empty or invalid json?): ', parseError);
+      }
+    });
+  } else {
+    file = getStorageFilePath(locale);
+
     try {
-      // parsing filecontents to locales[locale]
-      locales[locale] = JSON.parse(localeFile);
-    } catch (parseError) {
-      logError('unable to parse locales from file (maybe ' + file + ' is empty or invalid json?): ', parseError);
-    }
-  } catch (readError) {
-    // unable to read, so intialize that file
-    // locales[locale] are already set in memory, so no extra read required
-    // or locales[locale] are empty, which initializes an empty locale.json file
+      logDebug('read ' + file + ' for locale: ' + locale);
+      localeFile = fs.readFileSync(file);
+      try {
+        // parsing filecontents to locales[locale]
+        locales[locale] = JSON.parse(localeFile);
 
-    // since the current invalid locale could exist, we should back it up
-    if (fs.existsSync(file)) {
-      logDebug('backing up invalid locale ' + locale + ' to ' + file + '.invalid');
-      fs.renameSync(file, file + '.invalid');
-    }
+      } catch (parseError) {
+        logError('unable to parse locales from file (maybe ' + file + ' is empty or invalid json?): ', parseError);
+      }
+    } catch (readError) {
+      // unable to read, so intialize that file
+      // locales[locale] are already set in memory, so no extra read required
+      // or locales[locale] are empty, which initializes an empty locale.json file
 
-    logDebug('initializing ' + file);
-    write(locale);
+      // since the current invalid locale could exist, we should back it up
+      if (fs.existsSync(file)) {
+        logDebug('backing up invalid locale ' + locale + ' to ' + file + '.invalid');
+        fs.renameSync(file, file + '.invalid');
+      }
+
+      logDebug('initializing ' + file);
+      write(locale);
+    }
   }
+
+  // try {
+  //   logDebug('read ' + file + ' for locale: ' + locale);
+  //   localeFile = fs.readFileSync(file);
+  //   try {
+  //     // parsing filecontents to locales[locale]
+  //     locales[locale] = JSON.parse(localeFile);
+
+  //     // jtg: testing dropbox
+  //     console.log('read -> locales[' + locale + '] :', locales[locale]);
+
+  //   } catch (parseError) {
+  //     logError('unable to parse locales from file (maybe ' + file + ' is empty or invalid json?): ', parseError);
+  //   }
+  // } catch (readError) {
+  //   // unable to read, so intialize that file
+  //   // locales[locale] are already set in memory, so no extra read required
+  //   // or locales[locale] are empty, which initializes an empty locale.json file
+
+  //   // since the current invalid locale could exist, we should back it up
+  //   if (fs.existsSync(file)) {
+  //     logDebug('backing up invalid locale ' + locale + ' to ' + file + '.invalid');
+  //     fs.renameSync(file, file + '.invalid');
+  //   }
+
+  //   logDebug('initializing ' + file);
+  //   write(locale);
+  // }
 }
 
 /**
@@ -696,6 +751,38 @@ function getStorageFilePath(locale) {
     logDebug('will write to ' + filepath);
   }
   return filepath;
+}
+
+/**
+ * try reading a file from dropbox
+ */
+
+function getDropboxFile(locale) {
+  var deferred = Q.defer();
+  var ext = extension || '.json',
+      file = locale + ext;
+
+  var client = new Dropbox.Client({
+    key: dropboxClientKey,
+    secret: dropboxClientSecret
+  });
+
+  client.setCredentials({
+    token: dropboxClientToken
+  });
+
+  client.authenticate(function(error, client) {
+    if(error) {
+      deferred.reject(new Error(error));
+    }
+    client.readFile(file, function(error, filedata) {
+      if(error) {
+        deferred.reject(new Error(error));
+      }
+      deferred.resolve(filedata);
+    });
+  });
+  return deferred.promise;
 }
 
 /**

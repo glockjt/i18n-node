@@ -20,7 +20,9 @@
   "dependencies": {
     "sprintf": ">=0.1.1",
     "mustache": "*",
-    "debug": "*"
+    "debug": "*",
+    "q": "~1.0.1",
+    "dropbox": "~0.10.3"
   },
   "devDependencies": {
     "mocha": ">=1.8.1",
